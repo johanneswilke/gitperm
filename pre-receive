@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# Simple script managing per branch based access to git.
+# To install just copy this file to .git/hooks/pre-receive
+# Define rules in .git/gitperms.conf
+# For more information see https://github.com/johanneswilke/gitperm
+# Licensed under GPLv3
+
+# Disable perms if no config given
+if [ ! -f $GIT_DIR/gitperms.conf ]; then
+    exit 0
+fi
+
+# Get modified branch
+while read oldrev newrev refname; do
+    modifiedBranch="$(echo $refname | sed 's/refs\/heads\///g')"
+done
+
+# Evaluate rules from permission file
+lineNum=1
+
+while read -r branch action type value message; do
+    
+    rule="$branch $action $type $value $message"
+    
+    # Ignore lines starting with # or empty lines
+    if [ -n "$branch" ] && [[ $branch != \#* ]]; then
+	
+	malformedRule() {
+	    echo "Notice - malformed rule at line $lineNum: $rule"
+	}
+	
+        # performs the given action if checking for the given branch
+	performAction() {
+	    case "$1" in
+		"allow")
+		    if [ "$2" == "$modifiedBranch" ] || [ "$2" == '*' ]; then
+			echo "$message"
+			exit 0
+			fi
+		    ;;
+		"deny")
+		    if [ "$2" == "$modifiedBranch" ] || [ "$2" == '*' ]; then
+			echo "$message"
+			echo "User $USER is not allowed to push to branch $modifiedBranch!"
+			exit 1
+		    fi
+		    ;;
+		*)
+		    malformedRule
+	    esac
+	} # perfromAction()
+	
+	# check rule based on type
+	case "$type" in
+	    '*')
+		message="$value $message"
+		performAction "$action" "$branch"
+		;;
+	    "user")
+		if [ "$value" == "$USER" ] || [ "$value" == '*' ]; then
+		    performAction "$action" "$branch"
+		fi
+		;;
+	    "group")
+		for group in $(groups $USER); do
+		    if [ "$value" == "$group" ]; then
+			performAction "$action" "$branch"
+		    fi
+		done
+		;;
+	    *)
+		malformedRule
+	esac # type case
+	
+    fi # comment and whitespace if
+    
+    (( lineNum ++ ))
+done < $GIT_DIR/gitperms.conf # lines/rule loop
